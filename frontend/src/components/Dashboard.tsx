@@ -1,22 +1,27 @@
-import {
-	Box,
-	Container,
-	Flex,
-	Grid,
-	Heading,
-	Spinner,
-	Text,
-	Theme,
-} from "@radix-ui/themes";
+import { Box, Container, Flex, Grid, Heading, Text, Theme } from "@radix-ui/themes";
 import { useMetrics } from "../hooks/use-metrics";
-import { ClusterOverview } from "./ClusterOverview";
+import { StatusBar } from "./layout/StatusBar";
+import { ErrorBanner } from "./ui/ErrorBanner";
+import { SkeletonCard, SkeletonStat } from "./ui/Skeleton";
+import { MetricsSummary } from "./dashboard/MetricsSummary";
 import { GpuCard } from "./GpuCard";
 import { SlurmStatus } from "./SlurmStatus";
+import { AlertsPanel } from "./alerts/AlertsPanel";
 
 export function Dashboard() {
-	const { status, loading, error } = useMetrics({
+	const {
+		status,
+		loading,
+		error,
+		isConnected,
+		lastFetchTime,
+		retry,
+		refreshInterval,
+	} = useMetrics({
 		refreshInterval: 5000,
 	});
+
+	const showSkeleton = loading && status.nodes.length === 0;
 
 	return (
 		<Theme appearance="dark" accentColor="blue" grayColor="slate">
@@ -26,43 +31,91 @@ export function Dashboard() {
 					background: "var(--gray-1)",
 				}}
 			>
+				<StatusBar
+					isConnected={isConnected}
+					hasError={!!error}
+					lastUpdated={lastFetchTime}
+					refreshInterval={refreshInterval}
+					isLoading={loading}
+				/>
+
 				<Container size="4" p="4">
 					<Flex direction="column" gap="4">
-						<Flex justify="between" align="center">
-							<Heading size="7">GPU Watchdog</Heading>
-							{loading && <Spinner />}
-						</Flex>
-
 						{error && (
-							<Box p="4" style={{ background: "var(--red-3)", borderRadius: "var(--radius-2)" }}>
-								<Text color="red">{error}</Text>
-							</Box>
+							<ErrorBanner
+								message="Failed to fetch metrics"
+								details={error}
+								onRetry={retry}
+							/>
 						)}
 
-						<ClusterOverview status={status} />
+						{showSkeleton ? (
+							<>
+								{/* Skeleton for MetricsSummary */}
+								<Box
+									p="5"
+									style={{
+										background: "var(--color-panel-solid)",
+										borderRadius: "var(--radius-3)",
+										border: "1px solid var(--gray-a5)",
+									}}
+								>
+									<Grid columns={{ initial: "2", sm: "4" }} gap="6">
+										<SkeletonStat size="lg" />
+										<SkeletonStat size="lg" />
+										<SkeletonStat size="lg" />
+										<SkeletonStat size="lg" />
+									</Grid>
+								</Box>
 
-						{status.slurm && <SlurmStatus slurm={status.slurm} />}
+								{/* Skeleton for GPU cards */}
+								<Box>
+									<Heading size="4" mb="3">
+										GPU Nodes
+									</Heading>
+									<Grid columns={{ initial: "1", sm: "2", lg: "3" }} gap="4">
+										<SkeletonCard lines={4} />
+										<SkeletonCard lines={4} />
+										<SkeletonCard lines={4} />
+									</Grid>
+								</Box>
+							</>
+						) : (
+							<>
+								{/* Hero metrics summary */}
+								<MetricsSummary status={status} />
 
-						<Box>
-							<Heading size="4" mb="3">
-								GPU Nodes
-							</Heading>
-							{status.nodes.length === 0 ? (
-								<Text color="gray">No nodes connected. Configure endpoints to see GPU metrics.</Text>
-							) : (
-								<Grid columns={{ initial: "1", sm: "2", lg: "3" }} gap="4">
-									{status.nodes.flatMap((node) =>
-										node.gpus.map((gpu) => (
-											<GpuCard
-												key={`${node.nodeId}-${gpu.gpu}`}
-												gpu={gpu}
-												nodeId={node.hostname}
-											/>
-										)),
+								{/* Slurm section */}
+								{status.slurm && <SlurmStatus slurm={status.slurm} />}
+
+								{/* Alerts section */}
+								<AlertsPanel />
+
+								{/* GPU cards grid */}
+								<Box>
+									<Heading size="4" mb="3">
+										GPU Nodes
+									</Heading>
+									{status.nodes.length === 0 ? (
+										<Text color="gray">
+											No nodes connected. Configure endpoints to see GPU metrics.
+										</Text>
+									) : (
+										<Grid columns={{ initial: "1", sm: "2", lg: "3" }} gap="4">
+											{status.nodes.flatMap((node) =>
+												node.gpus.map((gpu) => (
+													<GpuCard
+														key={`${node.nodeId}-${gpu.gpu}`}
+														gpu={gpu}
+														nodeId={node.hostname}
+													/>
+												)),
+											)}
+										</Grid>
 									)}
-								</Grid>
-							)}
-						</Box>
+								</Box>
+							</>
+						)}
 					</Flex>
 				</Container>
 			</Box>

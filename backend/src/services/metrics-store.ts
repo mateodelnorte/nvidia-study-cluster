@@ -1,4 +1,4 @@
-import { and, desc, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { config } from "../config.js";
 import { gpuMetrics, slurmMetrics } from "../db/schema.js";
 import { getDb } from "../lib/db.js";
@@ -49,10 +49,7 @@ export function getGpuHistory(
 	];
 
 	if (nodeId) {
-		conditions.push(
-			// @ts-expect-error drizzle eq type
-			gpuMetrics.nodeId === nodeId,
-		);
+		conditions.push(eq(gpuMetrics.nodeId, nodeId));
 	}
 
 	const rows = db

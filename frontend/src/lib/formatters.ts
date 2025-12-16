@@ -27,6 +27,26 @@ export function formatTemp(celsius: number): string {
 }
 
 /**
+ * Format temperature with degree symbol (alias)
+ */
+export function formatTemperature(celsius: number): string {
+	return `${celsius.toFixed(0)}°C`;
+}
+
+/**
+ * Format bytes to human-readable string (KB, MB, GB, TB)
+ */
+export function formatBytes(bytes: number): string {
+	if (bytes === 0) return "0 B";
+
+	const units = ["B", "KB", "MB", "GB", "TB"];
+	const k = 1024;
+	const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+	return `${(bytes / k ** i).toFixed(1)} ${units[i]}`;
+}
+
+/**
  * Format power in watts
  */
 export function formatPower(watts: number): string {
