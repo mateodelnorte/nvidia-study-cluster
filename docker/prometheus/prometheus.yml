@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # DCGM Exporter on RunPod (via SSH tunnel to localhost:9400)
+  - job_name: 'dcgm-exporter'
+    static_configs:
+      - targets: ['host.docker.internal:9400']
+        labels:
+          instance: 'runpod-head'
+          environment: 'gpu-cluster'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

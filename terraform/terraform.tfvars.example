@@ -1,0 +1,43 @@
+# GPU Watchdog - Terraform Variables
+# Copy this file to terraform.tfvars and customize
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your preferences
+#   terraform plan
+
+cluster_name = "gpu-watchdog"
+worker_count = 1
+
+# -----------------------------------------------------------------------------
+# GPU Selection (uncomment ONE option)
+# -----------------------------------------------------------------------------
+
+# Budget Option (~$0.69/hr per node, ~$1.38/hr for 2-node cluster)
+# gpu_type_ids = ["NVIDIA GeForce RTX 4090"]
+
+# Recommended Option (~$1.49/hr per node, ~$2.98/hr for 2-node cluster)
+# Matches NVIDIA's actual A100 infrastructure - great for interview talking points
+gpu_type_ids = ["NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
+
+# Premium Option (~$2.49/hr per node, ~$4.98/hr for 2-node cluster)
+# gpu_type_ids = ["NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3"]
+
+# -----------------------------------------------------------------------------
+# Resource Configuration
+# -----------------------------------------------------------------------------
+
+gpu_count         = 1
+cloud_type        = "COMMUNITY"
+volume_gb         = 50
+container_disk_gb = 20
+
+# Prefer US data centers for lower latency
+data_center_ids = ["US-TX-3", "US-KS-2", "US-CA-1"]
+
+# -----------------------------------------------------------------------------
+# Optional: SSH Access
+# -----------------------------------------------------------------------------
+
+# Uncomment and add your public key for SSH access
+# ssh_public_key = "ssh-rsa AAAA... your-email@example.com"
