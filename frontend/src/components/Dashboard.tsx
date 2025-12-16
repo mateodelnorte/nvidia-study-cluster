@@ -15,8 +15,10 @@ export function Dashboard() {
 		error,
 		isConnected,
 		lastFetchTime,
-		retry,
+		failureCount,
+		refresh,
 		refreshInterval,
+		isFetching,
 	} = useMetrics({
 		refreshInterval: 5000,
 	});
@@ -36,7 +38,7 @@ export function Dashboard() {
 					hasError={!!error}
 					lastUpdated={lastFetchTime}
 					refreshInterval={refreshInterval}
-					isLoading={loading}
+					isLoading={isFetching}
 				/>
 
 				<Container size="4" p="4">
@@ -45,7 +47,8 @@ export function Dashboard() {
 							<ErrorBanner
 								message="Failed to fetch metrics"
 								details={error}
-								onRetry={retry}
+								onRetry={refresh}
+								consecutiveErrors={failureCount}
 							/>
 						)}
 

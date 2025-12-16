@@ -1,9 +1,11 @@
-.PHONY: help infra-init infra-plan infra-apply infra-destroy infra-output infra-refresh \
-        cluster-status cluster-ssh cluster-exec cluster-verify cluster-head-ip \
+.PHONY: help deploy deploy-skip-infra teardown \
+        infra-init infra-plan infra-apply infra-destroy infra-output infra-refresh \
+        cluster-status cluster-ssh cluster-ssh-info cluster-update-env cluster-exec cluster-verify cluster-head-ip \
+        cluster-setup-slurm cluster-add-worker \
         services-up services-down services-logs services-status \
         gpu-tunnel gpu-setup-dcgm gpu-metrics \
         template-build template-push \
-        dev-setup dev-backend dev-frontend clean
+        dev-setup dev-backend dev-frontend clean cost-estimate
 
 # Load environment variables from .env file
 include .env
@@ -13,6 +15,11 @@ export
 help:
 	@echo "GPU Watchdog - NVIDIA Interview Prep Project"
 	@echo ""
+	@echo "Quick Start:"
+	@echo "  make deploy           - Deploy everything (Terraform + Services)"
+	@echo "  make deploy-skip-infra - Deploy services only (pods exist)"
+	@echo "  make teardown         - Destroy everything"
+	@echo ""
 	@echo "Infrastructure:"
 	@echo "  make infra-init     - Initialize Terraform"
 	@echo "  make infra-plan     - Preview infrastructure changes"
@@ -21,10 +28,12 @@ help:
 	@echo "  make infra-output   - Show cluster connection info"
 	@echo ""
 	@echo "Cluster Operations:"
-	@echo "  make cluster-status - Show current cluster state"
-	@echo "  make cluster-ssh    - SSH to head node"
+	@echo "  make cluster-status   - Show current cluster state"
+	@echo "  make cluster-ssh-info - Show SSH commands for all nodes"
+	@echo "  make cluster-update-env - Update docker/.env with pod IDs"
+	@echo "  make cluster-ssh      - SSH to head node"
 	@echo "  make cluster-exec CMD=\"...\" - Run command on head node"
-	@echo "  make cluster-verify - Verify pod environment for deployment"
+	@echo "  make cluster-verify   - Verify pod environment for deployment"
 	@echo ""
 	@echo "Local Services (Docker Compose):"
 	@echo "  make services-up    - Start Prometheus + Grafana"
@@ -112,6 +121,61 @@ cluster-verify:
 
 cluster-head-ip:
 	@cd terraform && terraform output -raw head_node_public_ip 2>/dev/null || echo ""
+
+# Get SSH connection info (queries RunPod API for actual ports)
+# Usage: make cluster-ssh-info
+cluster-ssh-info:
+	@echo "Querying RunPod API for SSH ports..."
+	@curl -s -H "Authorization: Bearer $(RUNPOD_API_KEY)" "https://api.runpod.io/graphql" \
+		-H "Content-Type: application/json" \
+		-d '{"query": "query { myself { pods { id name runtime { ports { privatePort publicPort ip type } } } } }"}' | \
+		jq -r '.data.myself.pods[] | select(.name | startswith("gpu-watchdog")) | "\(.name):\n  ssh root@\([.runtime.ports[] | select(.privatePort == 22)] | .[0].ip) -p \([.runtime.ports[] | select(.privatePort == 22)] | .[0].publicPort) -i ~/.ssh/id_ed25519\n"'
+
+# Update docker/.env with current pod IDs
+cluster-update-env:
+	@echo "Updating docker/.env with current pod IDs..."
+	@HEAD_ID=$$(cd terraform && terraform output -raw head_node_id 2>/dev/null) && \
+		WORKER_ID=$$(cd terraform && terraform output -json worker_node_ids 2>/dev/null | jq -r '.[0]') && \
+		echo "HEAD_POD_ID=$$HEAD_ID" > docker/.env && \
+		echo "WORKER_POD_ID=$$WORKER_ID" >> docker/.env && \
+		echo "Updated docker/.env:" && cat docker/.env
+
+# Setup Slurm on head node (run this first)
+# Usage: make cluster-setup-slurm HEAD_IP=x.x.x.x HEAD_PORT=xxxxx
+cluster-setup-slurm:
+ifndef HEAD_IP
+	$(error HEAD_IP required. Usage: make cluster-setup-slurm HEAD_IP=x.x.x.x HEAD_PORT=xxxxx)
+endif
+ifndef HEAD_PORT
+	$(error HEAD_PORT required. Usage: make cluster-setup-slurm HEAD_IP=x.x.x.x HEAD_PORT=xxxxx)
+endif
+	@echo "Setting up Slurm on head node..."
+	ssh -o StrictHostKeyChecking=no -p $(HEAD_PORT) root@$(HEAD_IP) \
+		'NODE_ROLE=head CLUSTER_NAME=gpu-watchdog bash -s' < scripts/setup-slurm.sh
+
+# Add worker node to Slurm cluster
+# Usage: make cluster-add-worker HEAD_IP=x.x.x.x HEAD_PORT=xxxxx WORKER_IP=x.x.x.x WORKER_PORT=xxxxx
+cluster-add-worker:
+ifndef HEAD_IP
+	$(error HEAD_IP required)
+endif
+ifndef HEAD_PORT
+	$(error HEAD_PORT required)
+endif
+ifndef WORKER_IP
+	$(error WORKER_IP required)
+endif
+ifndef WORKER_PORT
+	$(error WORKER_PORT required)
+endif
+	@echo "Getting head node info..."
+	$(eval HEAD_HOSTNAME := $(shell ssh -o StrictHostKeyChecking=no -p $(HEAD_PORT) root@$(HEAD_IP) hostname))
+	$(eval HEAD_INTERNAL_IP := $(shell ssh -o StrictHostKeyChecking=no -p $(HEAD_PORT) root@$(HEAD_IP) "hostname -I | awk '{print \$$1}'"))
+	@echo "Head hostname: $(HEAD_HOSTNAME)"
+	@echo "Head internal IP: $(HEAD_INTERNAL_IP)"
+	@echo "Adding worker to cluster..."
+	ssh -o StrictHostKeyChecking=no -p $(WORKER_PORT) root@$(WORKER_IP) \
+		'NODE_ROLE=worker HEAD_ADDR=$(HEAD_INTERNAL_IP) HEAD_HOSTNAME=$(HEAD_HOSTNAME) CLUSTER_NAME=gpu-watchdog bash -s' < scripts/setup-slurm.sh
 
 # -----------------------------------------------------------------------------
 # Local Services (Docker Compose)
@@ -249,6 +313,18 @@ clean:
 	rm -rf frontend/node_modules frontend/dist
 	rm -rf agent/.venv agent/__pycache__
 	rm -rf terraform/.terraform
+
+# -----------------------------------------------------------------------------
+# Quick Start Commands
+# -----------------------------------------------------------------------------
+deploy:
+	@./scripts/deploy.sh
+
+deploy-skip-infra:
+	@./scripts/deploy.sh --skip-infra
+
+teardown:
+	@./scripts/deploy.sh --destroy
 
 cost-estimate:
 	@echo "Estimated Costs (per hour, 2-node cluster):"

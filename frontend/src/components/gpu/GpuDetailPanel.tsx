@@ -141,27 +141,3 @@ function DetailItem({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function GridComponent({
-	columns,
-	gap,
-	mb,
-	children,
-}: {
-	columns: string;
-	gap: string;
-	mb?: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div
-			style={{
-				display: "grid",
-				gridTemplateColumns: `repeat(${columns}, 1fr)`,
-				gap: `var(--space-${gap})`,
-				marginBottom: mb ? `var(--space-${mb})` : undefined,
-			}}
-		>
-			{children}
-		</div>
-	);
-}

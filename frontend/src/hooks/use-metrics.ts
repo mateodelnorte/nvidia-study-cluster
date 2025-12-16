@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { ClusterStatus, NodeMetrics, SlurmMetrics } from "../types/metrics";
 
 interface MetricsConfig {
@@ -58,152 +58,99 @@ export interface MetricsState {
 	error: string | null;
 	isConnected: boolean;
 	lastFetchTime: Date | null;
-	consecutiveErrors: number;
+	failureCount: number;
 	refresh: () => Promise<void>;
-	retry: () => Promise<void>;
 	refreshInterval: number;
+	isFetching: boolean;
+}
+
+async function fetchMetrics(apiEndpoint: string): Promise<ClusterStatus> {
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+	try {
+		const response = await fetch(apiEndpoint, {
+			signal: controller.signal,
+		});
+		clearTimeout(timeoutId);
+
+		if (!response.ok) {
+			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+		}
+
+		const data: ApiResponse = await response.json();
+
+		// Transform API response to ClusterStatus
+		const nodes: NodeMetrics[] = data.nodes.map((node) => ({
+			nodeId: node.nodeId,
+			hostname: node.hostname,
+			gpus: node.gpus,
+			timestamp: new Date(node.timestamp),
+		}));
+
+		const slurm: SlurmMetrics | null = data.slurm
+			? {
+					...data.slurm,
+					jobs: [],
+				}
+			: null;
+
+		return {
+			nodes,
+			slurm,
+			lastUpdated: new Date(data.lastUpdated),
+		};
+	} catch (err) {
+		clearTimeout(timeoutId);
+		if (err instanceof Error && err.name === "AbortError") {
+			throw new Error("Request timed out");
+		}
+		throw err;
+	}
 }
 
 export function useMetrics(config: MetricsConfig = {}): MetricsState {
 	const { apiEndpoint = "/api/metrics/current", refreshInterval = 5000 } = config;
 
-	const [status, setStatus] = useState<ClusterStatus>({
+	const {
+		data,
+		error,
+		isLoading,
+		isFetching,
+		isSuccess,
+		dataUpdatedAt,
+		failureCount,
+		refetch,
+	} = useQuery({
+		queryKey: ["metrics", apiEndpoint],
+		queryFn: () => fetchMetrics(apiEndpoint),
+		refetchInterval: refreshInterval,
+		// After 3 retries with backoff, stop retrying until next interval
+		retry: 3,
+		retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+		// Keep stale data visible while refetching
+		staleTime: refreshInterval - 1000,
+		// Don't garbage collect cached data quickly
+		gcTime: 5 * 60 * 1000, // 5 minutes
+	});
+
+	const status: ClusterStatus = data ?? {
 		nodes: [],
 		slurm: null,
 		lastUpdated: new Date(),
-	});
-	const [loading, setLoading] = useState(true);
-	const [error, setError] = useState<string | null>(null);
-	const [isConnected, setIsConnected] = useState(false);
-	const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
-	const [consecutiveErrors, setConsecutiveErrors] = useState(0);
-
-	const retryTimeoutRef = useRef<number | null>(null);
-	const intervalRef = useRef<number | null>(null);
-
-	// Calculate backoff delay with exponential backoff (max 30s)
-	const getBackoffDelay = useCallback(
-		(errorCount: number) => {
-			const baseDelay = refreshInterval;
-			const backoffDelay = Math.min(baseDelay * 2 ** errorCount, 30000);
-			return backoffDelay;
-		},
-		[refreshInterval],
-	);
-
-	const fetchMetrics = useCallback(
-		async (isRetry = false) => {
-			try {
-				if (!isRetry) {
-					setLoading(true);
-				}
-
-				const controller = new AbortController();
-				const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-				const response = await fetch(apiEndpoint, {
-					signal: controller.signal,
-				});
-				clearTimeout(timeoutId);
-
-				if (!response.ok) {
-					throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-				}
-
-				const data: ApiResponse = await response.json();
-
-				// Transform API response to ClusterStatus
-				const nodes: NodeMetrics[] = data.nodes.map((node) => ({
-					nodeId: node.nodeId,
-					hostname: node.hostname,
-					gpus: node.gpus,
-					timestamp: new Date(node.timestamp),
-				}));
-
-				const slurm: SlurmMetrics | null = data.slurm
-					? {
-							...data.slurm,
-							jobs: [],
-						}
-					: null;
-
-				setStatus({
-					nodes,
-					slurm,
-					lastUpdated: new Date(data.lastUpdated),
-				});
-				setError(null);
-				setIsConnected(true);
-				setLastFetchTime(new Date());
-				setConsecutiveErrors(0);
-			} catch (err) {
-				const errorMessage =
-					err instanceof Error
-						? err.name === "AbortError"
-							? "Request timed out"
-							: err.message
-						: "Failed to fetch metrics";
-
-				setError(errorMessage);
-				setIsConnected(false);
-				setConsecutiveErrors((prev) => prev + 1);
-			} finally {
-				setLoading(false);
-			}
-		},
-		[apiEndpoint],
-	);
-
-	// Manual retry with immediate fetch
-	const retry = useCallback(async () => {
-		// Clear any pending backoff
-		if (retryTimeoutRef.current) {
-			clearTimeout(retryTimeoutRef.current);
-			retryTimeoutRef.current = null;
-		}
-		setConsecutiveErrors(0);
-		await fetchMetrics(true);
-	}, [fetchMetrics]);
-
-	// Set up polling with exponential backoff on errors
-	useEffect(() => {
-		// Initial fetch
-		fetchMetrics();
-
-		const scheduleNext = () => {
-			const delay =
-				consecutiveErrors > 0
-					? getBackoffDelay(consecutiveErrors)
-					: refreshInterval;
-
-			intervalRef.current = window.setTimeout(() => {
-				fetchMetrics().then(scheduleNext);
-			}, delay);
-		};
-
-		// Start polling after initial fetch
-		const initialTimeout = window.setTimeout(scheduleNext, refreshInterval);
-
-		return () => {
-			clearTimeout(initialTimeout);
-			if (intervalRef.current) {
-				clearTimeout(intervalRef.current);
-			}
-			if (retryTimeoutRef.current) {
-				clearTimeout(retryTimeoutRef.current);
-			}
-		};
-	}, [fetchMetrics, refreshInterval, consecutiveErrors, getBackoffDelay]);
+	};
 
 	return {
 		status,
-		loading,
-		error,
-		isConnected,
-		lastFetchTime,
-		consecutiveErrors,
-		refresh: fetchMetrics,
-		retry,
+		loading: isLoading,
+		error: error instanceof Error ? error.message : error ? String(error) : null,
+		isConnected: isSuccess && !error,
+		lastFetchTime: dataUpdatedAt ? new Date(dataUpdatedAt) : null,
+		failureCount,
+		refresh: async () => {
+			await refetch();
+		},
 		refreshInterval,
+		isFetching,
 	};
 }

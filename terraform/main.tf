@@ -61,12 +61,15 @@ resource "runpod_pod" "worker_node" {
 
   ports = var.exposed_ports
 
-  # Environment variables (map of string, not list of objects)
+  # Environment variables for auto-configuration
+  # HEAD_NODE_IP will be passed dynamically - workers fetch config from head
   env = {
-    NODE_ROLE    = "worker"
-    CLUSTER_NAME = var.cluster_name
-    WORKER_INDEX = tostring(count.index)
-    PUBLIC_KEY   = var.ssh_public_key
+    NODE_ROLE      = "worker"
+    CLUSTER_NAME   = var.cluster_name
+    WORKER_INDEX   = tostring(count.index)
+    PUBLIC_KEY     = var.ssh_public_key
+    # Note: HEAD_NODE_IP needs to be set after head is provisioned
+    # Workers will retry connection until head is available
   }
 
   depends_on = [runpod_pod.head_node]

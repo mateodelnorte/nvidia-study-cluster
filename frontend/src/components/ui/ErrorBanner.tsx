@@ -7,6 +7,8 @@ interface ErrorBannerProps {
 	onRetry?: () => void;
 	onDismiss?: () => void;
 	dismissible?: boolean;
+	consecutiveErrors?: number;
+	nextRetryIn?: number; // seconds until next automatic retry
 }
 
 export function ErrorBanner({
@@ -15,6 +17,8 @@ export function ErrorBanner({
 	onRetry,
 	onDismiss,
 	dismissible = true,
+	consecutiveErrors,
+	nextRetryIn,
 }: ErrorBannerProps) {
 	const [dismissed, setDismissed] = useState(false);
 
@@ -24,6 +28,17 @@ export function ErrorBanner({
 		setDismissed(true);
 		onDismiss?.();
 	};
+
+	// Generate retry status message
+	const getRetryStatus = () => {
+		if (!consecutiveErrors || consecutiveErrors === 0) return null;
+		if (nextRetryIn && nextRetryIn > 0) {
+			return `Retrying in ${nextRetryIn}s (attempt ${consecutiveErrors})`;
+		}
+		return `Failed ${consecutiveErrors} time${consecutiveErrors > 1 ? "s" : ""}`;
+	};
+
+	const retryStatus = getRetryStatus();
 
 	return (
 		<Callout.Root color="red" variant="surface">
@@ -38,12 +53,17 @@ export function ErrorBanner({
 							{details}
 						</Text>
 					)}
+					{retryStatus && (
+						<Text size="1" color="gray" style={{ display: "block", marginTop: 2 }}>
+							{retryStatus}
+						</Text>
+					)}
 				</Box>
 				<Flex gap="2">
 					{onRetry && (
 						<Button size="1" variant="soft" color="red" onClick={onRetry}>
 							<RetryIcon />
-							Retry
+							Retry Now
 						</Button>
 					)}
 					{dismissible && (

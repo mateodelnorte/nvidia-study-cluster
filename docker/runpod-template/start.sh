@@ -1,56 +1,135 @@
 #!/bin/bash
-# GPU Watchdog - Pre-start script for RunPod pods
-# Starts GPU metrics exporter and configures Slurm
+# =============================================================================
+# GPU Watchdog - Slurm Configless Mode Setup
+# =============================================================================
+# Uses Slurm's built-in configless mode (v20.11+) for automatic cluster config.
+#
+# Environment variables (set via Terraform):
+#   NODE_ROLE:    "head" or "worker" (required)
+#   HEAD_NODE_IP: Internal IP of head node (required for workers)
+#   CLUSTER_NAME: Name of the cluster (default: gpu-watchdog)
+#   WORKER_NODES: Comma-separated "hostname:ip" pairs (optional, for head)
+#
+# How configless mode works:
+#   1. Head node runs slurmctld with --enable-configless
+#   2. Workers run slurmd with --conf-server=<head>:6817
+#   3. Workers automatically fetch config from head on startup
+#   4. No need for config file distribution or custom registration
+# =============================================================================
 
-# Don't exit on errors - we want to continue even if some parts fail
 set +e
-
 LOG_DIR="/workspace/logs"
 mkdir -p "$LOG_DIR"
 
-# =============================================================================
-# GPU Metrics Exporter
-# =============================================================================
-echo "Starting GPU metrics exporter on port 9400..."
-nohup python3 /workspace/scripts/gpu-metrics.py > "$LOG_DIR/gpu-metrics.log" 2>&1 &
-sleep 3
+NODE_ROLE="${NODE_ROLE:-head}"
+CLUSTER_NAME="${CLUSTER_NAME:-gpu-watchdog}"
+HEAD_NODE_IP="${HEAD_NODE_IP:-}"
+WORKER_NODES="${WORKER_NODES:-}"
 
+MY_HOSTNAME=$(hostname)
+MY_IP=$(hostname -I | awk '{print $1}')
+CPUS=$(nproc)
+MEMORY=$(free -m | awk '/Mem:/ {print int($2 * 0.95)}')
+
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+log "=========================================="
+log "GPU Watchdog - Slurm Configless Setup"
+log "=========================================="
+log "  Role:     $NODE_ROLE"
+log "  Cluster:  $CLUSTER_NAME"
+log "  Hostname: $MY_HOSTNAME"
+log "  IP:       $MY_IP"
+log "  CPUs:     $CPUS"
+log "  Memory:   ${MEMORY}MB"
+[ -n "$WORKER_NODES" ] && log "  Workers:  $WORKER_NODES"
+log ""
+
+# =============================================================================
+# 1. GPU Metrics Exporter
+# =============================================================================
+log "[1/3] Starting GPU metrics exporter..."
+nohup python3 /workspace/scripts/gpu-metrics.py > "$LOG_DIR/gpu-metrics.log" 2>&1 &
+sleep 2
 if curl -s http://localhost:9400/metrics | grep -q "DCGM"; then
-    echo "GPU metrics exporter started successfully"
+    log "      OK - http://localhost:9400/metrics"
 else
-    echo "WARNING: GPU metrics exporter may not be running"
-    cat "$LOG_DIR/gpu-metrics.log" 2>/dev/null || true
+    log "      WARN - may not be running"
 fi
 
 # =============================================================================
-# Slurm Configuration (single-node mode)
+# 2. Munge Authentication
 # =============================================================================
-HOSTNAME=$(hostname)
-IP=$(hostname -I | awk '{print $1}')
-CPUS=$(nproc)
+log ""
+log "[2/3] Setting up munge..."
+mkdir -p /var/log/munge /var/lib/munge /run/munge /etc/munge
 
-echo "Configuring Slurm for node: $HOSTNAME ($IP) with $CPUS CPUs"
+# Use pre-baked munge key (same in all pods from this image)
+if [ -f /etc/munge/munge.key.default ]; then
+    cp /etc/munge/munge.key.default /etc/munge/munge.key
+else
+    dd if=/dev/urandom bs=1 count=1024 2>/dev/null | base64 | head -c 1024 > /etc/munge/munge.key
+fi
+chmod 400 /etc/munge/munge.key
+chown -R munge:munge /etc/munge /var/log/munge /var/lib/munge /run/munge
 
-# Create slurm directories
-mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm /run/slurm
-chown -R root:root /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+pkill -9 munged 2>/dev/null || true
+sleep 1
+runuser -u munge -- /usr/sbin/munged --force 2>&1 || true
+log "      OK"
 
-# Generate slurm.conf
-cat > /etc/slurm/slurm.conf << EOF
-ClusterName=gpu-watchdog
-SlurmctldHost=$HOSTNAME($IP)
+# =============================================================================
+# 3. Slurm Setup
+# =============================================================================
+log ""
+log "[3/3] Starting Slurm..."
+mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm /run/slurm /etc/slurm
+
+pkill -9 slurmctld slurmd 2>/dev/null || true
+sleep 1
+
+if [ "$NODE_ROLE" = "head" ]; then
+    # =========================================================================
+    # HEAD NODE: Generate config and start slurmctld
+    # =========================================================================
+    log "      Mode: Controller (head)"
+
+    # Build node definitions
+    NODE_DEFS="NodeName=${MY_HOSTNAME} NodeAddr=${MY_IP} CPUs=${CPUS} RealMemory=${MEMORY} State=UNKNOWN"
+    ALL_NODES="${MY_HOSTNAME}"
+
+    # Add worker nodes if pre-defined via WORKER_NODES env var
+    if [ -n "$WORKER_NODES" ]; then
+        IFS=',' read -ra WORKERS <<< "$WORKER_NODES"
+        for worker in "${WORKERS[@]}"; do
+            W_HOSTNAME=$(echo "$worker" | cut -d: -f1)
+            W_IP=$(echo "$worker" | cut -d: -f2)
+            W_CPUS=$(echo "$worker" | cut -d: -f3)
+            W_MEM=$(echo "$worker" | cut -d: -f4)
+            [ -z "$W_CPUS" ] && W_CPUS="256"
+            [ -z "$W_MEM" ] && W_MEM="60000"
+            NODE_DEFS="${NODE_DEFS}
+NodeName=${W_HOSTNAME} NodeAddr=${W_IP} CPUs=${W_CPUS} RealMemory=${W_MEM} State=UNKNOWN"
+            ALL_NODES="${ALL_NODES},${W_HOSTNAME}"
+        done
+    fi
+
+    cat > /etc/slurm/slurm.conf << EOF
+# Auto-generated Slurm config for ${CLUSTER_NAME}
+ClusterName=${CLUSTER_NAME}
+SlurmctldHost=${MY_HOSTNAME}(${MY_IP})
+
 MpiDefault=none
 ProctrackType=proctrack/linuxproc
 ReturnToService=2
 SlurmctldPidFile=/run/slurm/slurmctld.pid
-SlurmctldPort=6817
 SlurmdPidFile=/run/slurm/slurmd.pid
-SlurmdPort=6818
 SlurmdSpoolDir=/var/spool/slurmd
-SlurmUser=root
 StateSaveLocation=/var/spool/slurmctld
+SlurmUser=root
+SlurmctldPort=6817
+SlurmdPort=6818
 SwitchType=switch/none
-TaskPlugin=task/none
 SchedulerType=sched/backfill
 SelectType=select/cons_tres
 SelectTypeParameters=CR_Core
@@ -59,52 +138,101 @@ JobCompType=jobcomp/none
 JobAcctGatherType=jobacct_gather/none
 SlurmctldDebug=info
 SlurmdDebug=info
-# Node configuration
-NodeName=$HOSTNAME NodeAddr=$IP CPUs=$CPUS RealMemory=64000 State=UNKNOWN
-# Partition
-PartitionName=gpu Nodes=$HOSTNAME Default=YES MaxTime=INFINITE State=UP
+TaskPlugin=task/none
+
+# Enable configless mode - workers fetch config from controller
+SlurmctldParameters=enable_configless
+
+# Dynamic nodes - allow up to 100 workers to register
+MaxNodeCount=100
+
+# Node definitions
+${NODE_DEFS}
+
+# Partition - use ALL to include dynamic nodes
+PartitionName=gpu Nodes=ALL Default=YES MaxTime=INFINITE State=UP
 EOF
 
-# Configure munge (key must be at least 32 bytes)
-echo "Configuring munge..."
-mkdir -p /var/log/munge /var/lib/munge /run/munge
-dd if=/dev/urandom bs=1 count=1024 2>/dev/null | base64 | head -c 1024 > /etc/munge/munge.key
-chmod 400 /etc/munge/munge.key
-chown -R munge:munge /etc/munge /var/log/munge /var/lib/munge /run/munge
-
-# Start munge
-echo "Starting munge..."
-runuser -u munge -- /usr/sbin/munged --force 2>&1 || echo "Munge start warning (may be ok)"
-sleep 1
-
-# Only start slurmctld on head node
-if [ "$NODE_ROLE" = "head" ]; then
-    echo "Starting slurmctld (head node)..."
-    /usr/sbin/slurmctld > "$LOG_DIR/slurmctld.log" 2>&1 &
+    log "      Starting slurmctld..."
+    slurmctld > "$LOG_DIR/slurmctld.log" 2>&1 &
     sleep 2
-fi
 
-# Start slurmd on all nodes
-echo "Starting slurmd..."
-/usr/sbin/slurmd > "$LOG_DIR/slurmd.log" 2>&1 &
-sleep 2
+    log "      Starting slurmd..."
+    slurmd > "$LOG_DIR/slurmd.log" 2>&1 &
+    sleep 2
 
-# Verify Slurm
-echo "Slurm status:"
-sinfo 2>&1 || echo "Slurm not fully ready yet (this is ok on worker nodes)"
-
-# =============================================================================
-# Prometheus Slurm Exporter (only on head node)
-# =============================================================================
-if [ "$NODE_ROLE" = "head" ]; then
-    echo "Starting prometheus-slurm-exporter on port 9341..."
+    log "      Starting prometheus-slurm-exporter (port 9341)..."
     nohup /usr/local/bin/prometheus-slurm-exporter --listen-address=:9341 > "$LOG_DIR/slurm-exporter.log" 2>&1 &
-    sleep 2
-    if curl -s http://localhost:9341/metrics | grep -q "slurm_"; then
-        echo "Slurm exporter started successfully"
-    else
-        echo "WARNING: Slurm exporter may not be running"
+
+else
+    # =========================================================================
+    # WORKER NODE: Use configless mode to fetch config from head
+    # =========================================================================
+    log "      Mode: Worker"
+
+    # Discover head if not provided
+    if [ -z "$HEAD_NODE_IP" ]; then
+        log "      Discovering head node..."
+        for ip in 172.21.0.3 172.21.0.2 172.20.0.3 172.20.0.2 172.19.0.3; do
+            [ "$ip" = "$MY_IP" ] && continue
+            if curl -s --connect-timeout 2 "http://${ip}:9400/health" | grep -q "OK"; then
+                HEAD_NODE_IP="$ip"
+                log "      Found head at: $HEAD_NODE_IP"
+                break
+            fi
+        done
     fi
+
+    if [ -z "$HEAD_NODE_IP" ]; then
+        log "      ERROR: HEAD_NODE_IP not set and auto-discovery failed"
+        log "      Set HEAD_NODE_IP environment variable"
+        exit 1
+    fi
+
+    # Wait for head to be ready
+    log "      Waiting for head node ($HEAD_NODE_IP)..."
+    for i in {1..30}; do
+        if curl -s --connect-timeout 2 "http://${HEAD_NODE_IP}:9400/health" | grep -q "OK"; then
+            log "      Head is ready"
+            break
+        fi
+        sleep 5
+    done
+
+    # Start slurmd with -Z for dynamic self-registration (Slurm 22.05+)
+    # The worker will automatically register itself with the controller
+    # NodeName is automatically derived from hostname
+    log "      Starting slurmd with dynamic registration (-Z)..."
+    slurmd -Z --conf-server="${HEAD_NODE_IP}:6817" \
+        --conf "CPUs=${CPUS} RealMemory=${MEMORY}" \
+        > "$LOG_DIR/slurmd.log" 2>&1 &
+    sleep 5
+
+    # Verify registration
+    log "      Verifying registration..."
 fi
 
-echo "Pre-start complete"
+# =============================================================================
+# Summary
+# =============================================================================
+log ""
+log "=========================================="
+log "Startup Complete"
+log "=========================================="
+
+if [ "$NODE_ROLE" = "head" ]; then
+    sleep 2
+    log ""
+    log "Cluster status:"
+    sinfo -N -l 2>&1 || log "(Slurm starting...)"
+
+    log ""
+    log "Endpoints:"
+    log "  GPU Metrics:   http://${MY_IP}:9400/metrics"
+    log "  Slurm Metrics: http://${MY_IP}:9341/metrics"
+    log ""
+    log "For workers, set: HEAD_NODE_IP=${MY_IP}"
+else
+    log ""
+    log "Worker joined cluster. Run 'sinfo -N' on head to verify."
+fi

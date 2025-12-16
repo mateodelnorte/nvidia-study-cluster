@@ -50,15 +50,14 @@ export function SkeletonCard({ showHeader = true, lines = 3 }: SkeletonCardProps
 			}}
 		>
 			{showHeader && (
-				<Skeleton width="60%" height="1.5rem" style={{ marginBottom: "var(--space-3)" }} />
+				<Box style={{ marginBottom: "var(--space-3)" }}>
+					<Skeleton width="60%" height="1.5rem" />
+				</Box>
 			)}
 			{Array.from({ length: lines }).map((_, i) => (
-				<Skeleton
-					key={i}
-					width={i === lines - 1 ? "80%" : "100%"}
-					height="1rem"
-					style={{ marginBottom: i < lines - 1 ? "var(--space-2)" : 0 }}
-				/>
+				<Box key={i} style={{ marginBottom: i < lines - 1 ? "var(--space-2)" : 0 }}>
+					<Skeleton width={i === lines - 1 ? "80%" : "100%"} height="1rem" />
+				</Box>
 			))}
 		</Box>
 	);
@@ -72,7 +71,9 @@ export function SkeletonStat({ size = "md" }: SkeletonStatProps) {
 	const heights = { sm: "1.5rem", md: "2rem", lg: "3rem" };
 	return (
 		<Box>
-			<Skeleton width="4rem" height="0.75rem" style={{ marginBottom: "var(--space-1)" }} />
+			<Box style={{ marginBottom: "var(--space-1)" }}>
+				<Skeleton width="4rem" height="0.75rem" />
+			</Box>
 			<Skeleton width="6rem" height={heights[size]} />
 		</Box>
 	);

@@ -96,10 +96,14 @@ services:
     expose:
       - "3000"
     volumes:
-      # Mount whole directory for hot reload
+      # Bind mount source code for hot reload/HMR
       - ../frontend:/app
-      # Use named volume for node_modules (persists container deps, not host)
-      - frontend_node_modules:/app/node_modules
+      # Anonymous volume to preserve container's node_modules (prevents host override)
+      - /app/node_modules
+    environment:
+      # Enable polling for file changes (fixes HMR in Docker)
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
     stdin_open: true
     tty: true
 
@@ -107,4 +111,3 @@ volumes:
   prometheus_data:
   grafana_data:
   backend_data:
-  frontend_node_modules:

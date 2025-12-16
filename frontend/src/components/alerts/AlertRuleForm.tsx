@@ -40,7 +40,7 @@ export function AlertRuleForm({ initialData, onSubmit, onCancel }: AlertRuleForm
 	const [threshold, setThreshold] = useState(initialData?.threshold?.toString() || "80");
 	const [duration, setDuration] = useState(initialData?.duration?.toString() || "0");
 	const [nodeFilter, setNodeFilter] = useState(initialData?.nodeFilter || "");
-	const [enabled, setEnabled] = useState(initialData?.enabled ?? true);
+	const [enabled] = useState(initialData?.enabled ?? true);
 	const [errors, setErrors] = useState<Record<string, string>>({});
 
 	const validate = (): boolean => {

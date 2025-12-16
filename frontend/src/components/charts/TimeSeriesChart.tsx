@@ -95,7 +95,7 @@ export function TimeSeriesChart({
 						fontSize: 12,
 					}}
 					labelFormatter={(ts) => formatTooltipTime(ts as number)}
-					formatter={(value: number) => [`${valueFormatter(value)}${unit}`, ""]}
+					formatter={(value) => [`${valueFormatter(value as number)}${unit}`, ""]}
 				/>
 				<defs>
 					<linearGradient id={`gradient-${color}`} x1="0" y1="0" x2="0" y2="1">

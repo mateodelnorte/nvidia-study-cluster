@@ -1,37 +1,75 @@
 # GPU Watchdog - RunPod Pod Template
 
-Custom RunPod pod template with the official NVIDIA DCGM Exporter for Prometheus.
+Custom RunPod pod template with Slurm workload manager and GPU metrics exporter.
 
 ## Features
 
 - Based on `runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04`
-- Includes official NVIDIA DCGM Exporter (built from source)
-- Auto-starts metrics server on pod boot
-- Compatible with Prometheus scraping
+- **Slurm Workload Manager** with configless mode for automatic multi-node clusters
+- **GPU Metrics Exporter** (nvidia-smi based, Prometheus format)
+- **Prometheus Slurm Exporter** for cluster metrics
+- Auto-configures on pod boot via environment variables
 
-## Metrics Exposed
+## Quick Start
 
-The official DCGM Exporter provides comprehensive GPU metrics including:
+### Environment Variables
 
-| Metric | Description |
-|--------|-------------|
-| `DCGM_FI_DEV_GPU_UTIL` | GPU utilization (%) |
-| `DCGM_FI_DEV_MEM_COPY_UTIL` | Memory utilization (%) |
-| `DCGM_FI_DEV_FB_USED` | Framebuffer used (MiB) |
-| `DCGM_FI_DEV_FB_FREE` | Framebuffer free (MiB) |
-| `DCGM_FI_DEV_GPU_TEMP` | GPU temperature (C) |
-| `DCGM_FI_DEV_POWER_USAGE` | Power usage (W) |
-| `DCGM_FI_DEV_SM_CLOCK` | SM clock (MHz) |
-| `DCGM_FI_DEV_MEM_CLOCK` | Memory clock (MHz) |
-| `DCGM_FI_DEV_PCIE_TX_THROUGHPUT` | PCIe TX throughput (KB/s) |
-| `DCGM_FI_DEV_PCIE_RX_THROUGHPUT` | PCIe RX throughput (KB/s) |
-| `DCGM_FI_DEV_NVLINK_BANDWIDTH_*` | NVLink bandwidth metrics |
-| `DCGM_FI_DEV_XID_ERRORS` | XID error count |
-| `DCGM_FI_DEV_ECC_*` | ECC error metrics |
+Set these in Terraform or RunPod console:
 
-See [DCGM Field Identifiers](https://docs.nvidia.com/datacenter/dcgm/latest/dcgm-api/dcgm-api-field-ids.html) for complete list.
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NODE_ROLE` | Yes | `head` or `worker` |
+| `HEAD_NODE_IP` | Workers only | Internal IP of head node |
+| `CLUSTER_NAME` | No | Cluster name (default: `gpu-watchdog`) |
+| `WORKER_NODES` | No | Pre-define workers: `hostname1:ip1,hostname2:ip2` |
 
-## Build & Push
+### Multi-Node Cluster Setup
+
+1. **Head node** starts first with `NODE_ROLE=head`
+2. **Workers** start with `NODE_ROLE=worker` and `HEAD_NODE_IP=<head-internal-ip>`
+3. Workers use Slurm's **configless mode** to fetch config automatically
+
+### Terraform Example
+
+```hcl
+resource "runpod_pod" "head_node" {
+  env = {
+    NODE_ROLE    = "head"
+    CLUSTER_NAME = "gpu-watchdog"
+  }
+}
+
+resource "runpod_pod" "worker_node" {
+  env = {
+    NODE_ROLE    = "worker"
+    HEAD_NODE_IP = "172.21.0.3"  # Set after head is created
+  }
+}
+```
+
+## Endpoints
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 9400 | GPU Metrics | Prometheus metrics (`/metrics`) |
+| 9341 | Slurm Metrics | Cluster stats (head only) |
+| 6817 | slurmctld | Slurm controller (head only) |
+| 6818 | slurmd | Slurm daemon (all nodes) |
+
+## GPU Metrics
+
+```
+DCGM_FI_DEV_GPU_UTIL      - GPU utilization (%)
+DCGM_FI_DEV_MEM_COPY_UTIL - Memory utilization (%)
+DCGM_FI_DEV_FB_USED       - Framebuffer used (MiB)
+DCGM_FI_DEV_FB_FREE       - Framebuffer free (MiB)
+DCGM_FI_DEV_GPU_TEMP      - GPU temperature (C)
+DCGM_FI_DEV_POWER_USAGE   - Power usage (W)
+DCGM_FI_DEV_SM_CLOCK      - SM clock (MHz)
+DCGM_FI_DEV_MEM_CLOCK     - Memory clock (MHz)
+```
+
+## Build & Deploy
 
 ```bash
 # Build for linux/amd64 (required for RunPod)
@@ -41,59 +79,67 @@ make template-build DOCKER_USERNAME=yourusername
 make template-push DOCKER_USERNAME=yourusername
 ```
 
-## Create RunPod Template
+## How It Works
 
-1. Go to [RunPod Console](https://runpod.io/console/user/templates)
-2. Click "New Template"
-3. Configure:
-   - **Template Name**: `gpu-watchdog`
-   - **Docker Image**: `<your-username>/gpu-watchdog-pod:latest`
-   - **Exposed HTTP Ports**: `9400`
-   - **Exposed TCP Ports**: `22`
-4. Save template
+### Slurm Dynamic Node Registration (v22.05+)
 
-## Use Template
+The template uses Slurm 23.11's dynamic node registration feature:
 
-When creating a new pod, select your `gpu-watchdog` template. The DCGM Exporter will start automatically.
+1. **Head node** generates `slurm.conf` with `MaxNodeCount=100` and `Nodes=ALL` partition
+2. **Workers** run `slurmd -Z --conf-server=<head>:6817 --conf "NodeName=... CPUs=... RealMemory=..."`
+3. Workers **self-register** with the controller - no manual config updates needed
+4. As workers boot, they automatically appear in `sinfo` output
 
-Access metrics at: `http://<pod-ip>:9400/metrics`
+### Munge Authentication
 
-## Local Testing
-
-```bash
-# SSH to pod
-ssh root@<pod-ip> -p <port>
-
-# Check metrics
-curl http://localhost:9400/metrics
-
-# Check logs
-cat /workspace/logs/dcgm-exporter.log
-
-# Check DCGM status
-dcgmi discovery -l
-```
+All pods from the same Docker image share a pre-baked munge key, enabling inter-node authentication without additional setup.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  RunPod Pod                                 │
-│                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  nv-hostengine  │──│  dcgm-exporter  │  │
-│  │  (DCGM daemon)  │  │    :9400        │  │
-│  └────────┬────────┘  └────────┬────────┘  │
-│           │                    │           │
-│           ▼                    ▼           │
-│  ┌─────────────────────────────────────┐   │
-│  │         NVIDIA GPU Driver           │   │
-│  └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  HEAD NODE (NODE_ROLE=head)                            │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐   │
+│  │  slurmctld  │ │   slurmd    │ │  gpu-metrics.py │   │
+│  │   :6817     │ │   :6818     │ │     :9400       │   │
+│  └─────────────┘ └─────────────┘ └─────────────────┘   │
+│                                  ┌─────────────────┐   │
+│                                  │ slurm-exporter  │   │
+│                                  │     :9341       │   │
+│                                  └─────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+                          │
+                    configless
+                          │
+┌─────────────────────────▼───────────────────────────────┐
+│  WORKER NODE (NODE_ROLE=worker)                        │
+│  ┌─────────────┐ ┌─────────────────┐                   │
+│  │   slurmd    │ │  gpu-metrics.py │                   │
+│  │   :6818     │ │     :9400       │                   │
+│  └─────────────┘ └─────────────────┘                   │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Testing
+
+```bash
+# SSH to head node
+ssh root@<pod-ip> -p <port>
+
+# Check cluster status
+sinfo -N -l
+
+# Submit a test job
+sbatch --wrap="nvidia-smi && hostname"
+
+# Check GPU metrics
+curl http://localhost:9400/metrics
+
+# Check Slurm metrics (head only)
+curl http://localhost:9341/metrics
 ```
 
 ## Sources
 
-- [NVIDIA DCGM Exporter](https://github.com/NVIDIA/dcgm-exporter)
-- [DCGM Documentation](https://docs.nvidia.com/datacenter/dcgm/latest/)
-- [Grafana NVIDIA Dashboard](https://grafana.com/grafana/dashboards/12239)
+- [Slurm Configless Mode](https://slurm.schedmd.com/configless_slurm.html)
+- [Prometheus Slurm Exporter](https://github.com/vpenso/prometheus-slurm-exporter)

@@ -16,13 +16,33 @@ LABEL maintainer="GPU Watchdog Project"
 LABEL description="RunPod pod template with Slurm and GPU metrics"
 LABEL version="3.0.0"
 
-# Install Slurm, munge, golang (for slurm exporter), and utilities
+# Install build dependencies for Slurm from source
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    slurm-wlm \
     munge \
+    libmunge-dev \
+    libmunge2 \
     golang-go \
     git \
+    curl \
+    build-essential \
+    wget \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Build and install Slurm 23.11 from source for dynamic node support
+ARG SLURM_VERSION=23.11.10
+RUN wget -q https://download.schedmd.com/slurm/slurm-${SLURM_VERSION}.tar.bz2 && \
+    tar xjf slurm-${SLURM_VERSION}.tar.bz2 && \
+    cd slurm-${SLURM_VERSION} && \
+    ./configure --prefix=/usr --sysconfdir=/etc/slurm --with-munge && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && rm -rf slurm-${SLURM_VERSION} slurm-${SLURM_VERSION}.tar.bz2
+
+# Pre-generate munge key (same key for all nodes from this image)
+# All pods built from this image share the same munge key for authentication
+RUN dd if=/dev/urandom bs=1 count=1024 2>/dev/null | base64 | head -c 1024 > /etc/munge/munge.key.default && \
+    chmod 400 /etc/munge/munge.key.default
 
 # Build prometheus-slurm-exporter
 RUN git clone --depth 1 https://github.com/vpenso/prometheus-slurm-exporter.git /tmp/slurm-exporter && \
