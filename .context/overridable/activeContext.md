@@ -2,78 +2,79 @@
 
 ## Current Focus
 
-**Multi-Node Slurm Working** - Global networking enabled for reliable cross-machine pod communication. Full stack operational.
+**All Core Features Complete** - Full stack GPU monitoring platform with AI diagnostic agent operational. Ready for demo/interview preparation.
 
 ## Architecture
 
-**Split Architecture (Finalized 2025-12-16):**
+**Split Architecture with AI Agent (2025-12-17):**
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  LOCAL (Docker Compose)                                          │
-│                                                                  │
-│  ┌──────────────┐    ┌─────────────────────────────────────┐   │
-│  │   Browser    │───▶│  Nginx Gateway (:3000)              │   │
-│  └──────────────┘    │  ├── /api/* → Backend API           │   │
-│                      │  └── /* → Frontend (Vite)           │   │
-│                      └─────────────────────────────────────┘   │
-│                                      │                          │
-│  ┌─────────────┐  ┌─────────────┐   │   ┌─────────────┐        │
-│  │ Prometheus  │  │  Grafana    │   │   │  Backend    │        │
-│  │   :9090     │  │   :3001     │   │   │  :8080      │        │
-│  └─────────────┘  └─────────────┘   │   └──────┬──────┘        │
-│                                      │          │ polls         │
-│                                      │          ▼               │
-│                                      │   ┌─────────────┐        │
-│                                      └──▶│  Frontend   │        │
-│                                          │  (React)    │        │
-│                                          └─────────────┘        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              Backend polls RunPod via HTTPS proxy
-                              │
-┌─────────────────────────────┼───────────────────────────────────┐
-│  RUNPOD PODS (provisioned via Terraform)                         │
-│                             ▼                                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  HEAD NODE                                               │   │
-│  │  ├── GPU Metrics Server (:9400)                          │   │
-│  │  ├── Slurm Controller + Exporter (:9341)                 │   │
-│  │  └── A100-SXM4-80GB GPU                                  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  WORKER NODE                                             │   │
-│  │  ├── GPU Metrics Server (:9400)                          │   │
-│  │  └── A100-SXM4-80GB GPU                                  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  LOCAL (Docker Compose)                                                  │
+│                                                                          │
+│  ┌──────────────┐    ┌─────────────────────────────────────┐            │
+│  │   Browser    │───▶│  Nginx Gateway (:3000)              │            │
+│  └──────────────┘    │  ├── /api/* → Backend API           │            │
+│                      │  └── /* → Frontend (Vite)           │            │
+│                      └─────────────────────────────────────┘            │
+│                                      │                                   │
+│  ┌─────────────┐  ┌─────────────┐   │   ┌─────────────────────────────┐│
+│  │ Prometheus  │  │  Grafana    │   │   │  Backend (:8080)            ││
+│  │   :9090     │  │   :3001     │   │   │  ├── Metrics Collection     ││
+│  └─────────────┘  └─────────────┘   │   │  ├── Alert Evaluation       ││
+│                                      │   │  └── Agent Service ────────┼┼──┐
+│                                      │   └────────────────────────────┘│  │
+│                                      │                                   │  │
+│                                      │   ┌─────────────────────────────┐│  │
+│                                      └──▶│  Frontend (React)           ││  │
+│                                          │  ├── Dashboard              ││  │
+│                                          │  ├── Alerts UI              ││  │
+│                                          │  └── AI Chat Panel          ││  │
+│                                          └─────────────────────────────┘│  │
+└──────────────────────────────────────────────────────────────────────────┘  │
+                              │                                               │
+              Backend polls RunPod via HTTPS proxy                            │
+                              │                                               │
+┌─────────────────────────────┼───────────────────────────────────────────────┼─┐
+│  RUNPOD PODS (provisioned via Terraform)                                    │ │
+│                             ▼                                               │ │
+│  ┌────────────────────────────────────────────────────────────────────┐    │ │
+│  │  HEAD NODE (A100-SXM4-80GB)                                        │    │ │
+│  │  ├── GPU Metrics Server (:9400)                                    │    │ │
+│  │  ├── Slurm Controller + Exporter (:9341)                           │    │ │
+│  │  ├── vLLM Server (:8000) ◀─────────────────────────────────────────┼────┘ │
+│  │  │   └── Nemotron-3-Nano-30B (~60GB VRAM)                          │      │
+│  │  └── Log Server (:8002) - vLLM startup logs                        │      │
+│  └────────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  WORKER NODE (A100-SXM4-80GB)                                      │     │
+│  │  ├── GPU Metrics Server (:9400)                                    │     │
+│  │  └── Slurm Agent (connects to head)                                │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Recent Changes (2025-12-16)
+## Recent Changes (2025-12-17)
 
-### Global Networking for Cross-Machine Pods
-- Enabled `global_networking = true` in Terraform for both head and worker
-- Worker connects via `POD_ID.runpod.internal` DNS name (works across machines)
-- Pods get 10.x.x.x IPs on RunPod's internal network (100 Mbps between pods)
-- No longer relies on pods landing on same physical machine
+### AI Diagnostic Agent (Task 06)
+- vLLM 0.12.0 serving NVIDIA Nemotron-3-Nano-30B-A3B-BF16
+- OpenAI-compatible API with tool calling (`qwen3_coder` parser)
+- Agentic loop: query → LLM → tool calls → backend APIs → response
+- 7 tools for cluster diagnostics (status, metrics, alerts, history, Slurm)
+- ChatPanel with markdown rendering (tables, code blocks, lists)
+- vLLM logs viewer for monitoring model loading progress
 
-### Deployment Orchestration
-- Created `scripts/deploy.sh` for zero-to-one deployment
-- `make deploy` provisions pods, sets up Slurm, starts services
-- `make teardown` destroys everything cleanly
-- deploy.sh now passes head pod ID (not internal IP) to workers
+### Infrastructure Updates
+- Docker image `mateodelnorte/gpu-watchdog-pod:v4.2.0` with vLLM
+- HuggingFace token integration for gated model downloads
+- Persistent volume for model cache (100GB, HF_HOME=/workspace/.cache)
+- Port 8002 for log server (8001 used by RunPod nginx)
+- `LLM_BASE_URL` env var added to docker-compose.yml
 
-### TanStack Query Migration
-- Frontend uses `@tanstack/react-query` for data fetching
-- Exponential backoff on errors (1s → 2s → 4s, max 30s)
-- Stale-while-revalidate caching
-- No more infinite retry loops when backend is down
-
-### Docker Compose Improvements
-- Anonymous volume for node_modules (`- /app/node_modules`)
-- CHOKIDAR_USEPOLLING for reliable HMR in Docker
-- Cleaner separation of host source and container deps
+### Documentation
+- Created comprehensive README.md at project root
+- Architecture diagrams, design decisions, quick start guide
 
 ## Working Features
 
@@ -81,19 +82,27 @@
 |---------|--------|-------|
 | Zero-to-one deploy | ✅ | `make deploy` handles everything |
 | Multi-node Slurm | ✅ | Global networking for cross-machine communication |
-| GPU metrics | ✅ | Both nodes, all metrics |
-| Slurm metrics | ✅ | 512 CPUs, 2 nodes, job queue |
-| Historical data | ✅ | Backend stores in SQLite |
-| Alert rules | ✅ | Create, edit, delete alerts |
-| Error handling | ✅ | TanStack Query with backoff |
+| GPU metrics | ✅ | Both nodes, all metrics (utilization, temp, memory, power) |
+| Slurm metrics | ✅ | 512 CPUs, 2 nodes, job queue status |
+| Historical data | ✅ | Backend stores in SQLite, charts in frontend |
+| Alert rules | ✅ | Create, edit, delete alerts with threshold config |
+| AI Chat | ✅ | Nemotron-3 via vLLM, tool calling, markdown rendering |
+| Error handling | ✅ | TanStack Query with exponential backoff |
 | Hot reload | ✅ | Vite in Docker with polling |
 
 ## Key Files
 
+### AI Agent
+- [backend/src/services/agent.ts](../../backend/src/services/agent.ts) - Agent implementation
+- [backend/src/routes/agent.ts](../../backend/src/routes/agent.ts) - API endpoints
+- [frontend/src/components/agent/ChatPanel.tsx](../../frontend/src/components/agent/ChatPanel.tsx) - Chat UI
+- [frontend/src/hooks/use-agent.ts](../../frontend/src/hooks/use-agent.ts) - React Query hook
+- [docker/runpod-template/start.sh](../../docker/runpod-template/start.sh) - vLLM startup
+
 ### Deployment
 - [scripts/deploy.sh](../../scripts/deploy.sh) - Full orchestration script
-- [scripts/setup-slurm.sh](../../scripts/setup-slurm.sh) - Slurm configless setup
 - [Makefile](../../Makefile) - deploy, deploy-skip-infra, teardown targets
+- [terraform/main.tf](../../terraform/main.tf) - RunPod provisioning with vLLM env vars
 
 ### Backend
 - [backend/src/index.ts](../../backend/src/index.ts) - Express server
@@ -103,11 +112,7 @@
 ### Frontend
 - [frontend/src/hooks/use-metrics.ts](../../frontend/src/hooks/use-metrics.ts) - TanStack Query hook
 - [frontend/src/components/Dashboard.tsx](../../frontend/src/components/Dashboard.tsx) - Main layout
-- [frontend/src/components/alerts/AlertsPanel.tsx](../../frontend/src/components/alerts/AlertsPanel.tsx) - Alert UI
-
-### Infrastructure
-- [docker/docker-compose.yml](../../docker/docker-compose.yml) - All services
-- [terraform/main.tf](../../terraform/main.tf) - RunPod provisioning
+- [frontend/src/index.css](../../frontend/src/index.css) - Markdown styles
 
 ## Quick Start
 
@@ -118,7 +123,7 @@ make deploy
 # Services only (pods already exist)
 make deploy-skip-infra
 
-# Tear down everything
+# Tear down everything (saves money!)
 make teardown
 
 # Access points:
@@ -128,13 +133,26 @@ make teardown
 # - Backend API: http://localhost:8080
 ```
 
-## Next Actions
+## Interview Talking Points
 
-1. **Task 06: AI Agent** - LangChain.js for diagnostic assistance
-2. **Polish for demo** - Job submission UI, notification channels
+1. **Full Stack:** React + Node.js + SQLite, real-time data fetching with TanStack Query
+2. **GPU Infrastructure:** Terraform-managed RunPod pods, NVIDIA A100s, Slurm workload manager
+3. **NVIDIA Model Stack:** Nemotron-3-Nano-30B via vLLM, demonstrating NVIDIA ecosystem familiarity
+4. **Observability:** Prometheus metrics, Grafana dashboards, custom alerting engine
+5. **AI Operations:** Tool-calling agent for cluster diagnostics, model-agnostic design
 
 ## Known Limitations
 
 1. **Pod IDs change per deploy** - docker/.env auto-updated by deploy.sh
 2. **No notification channels** - Alerts fire but don't send emails/Slack yet
-3. **Global network bandwidth** - 100 Mbps between pods (sufficient for control plane, may limit data transfer)
+3. **Global network bandwidth** - 100 Mbps between pods (sufficient for control plane)
+4. **Model loading time** - ~5 minutes for Nemotron-3 to load on cold start
+5. **Single conversation** - Chat history not persisted across page reloads
+
+## Potential Enhancements
+
+- Notification channels (Slack, email, PagerDuty)
+- Job submission UI for Slurm
+- Streaming LLM responses
+- Conversation history persistence
+- GPU stress testing workloads

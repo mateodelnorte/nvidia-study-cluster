@@ -1,8 +1,8 @@
 ---
 title: "06: AI Diagnostic Agent"
 created: 2025-12-16
-modified: 2025-12-16
-status: active
+modified: 2025-12-17
+status: done
 priority: medium
 owner: mattwwalters
 assignee: claude-agent
@@ -16,13 +16,13 @@ Build an AI-powered diagnostic assistant running **NVIDIA's Nemotron-3-Nano-30B*
 
 ## Goals
 
-- [ ] Deploy Nemotron-3-Nano-30B via vLLM on head pod
-- [ ] Create model-agnostic agent service (OpenAI-compatible API)
-- [ ] Define tools for querying metrics, alerts, and cluster status
-- [ ] Implement agentic loop with tool execution
-- [ ] Add `/api/agent/chat` endpoint to backend
-- [ ] Create chat UI component in frontend
-- [ ] Test end-to-end with real cluster data
+- [x] Deploy Nemotron-3-Nano-30B via vLLM on head pod
+- [x] Create model-agnostic agent service (OpenAI-compatible API)
+- [x] Define tools for querying metrics, alerts, and cluster status
+- [x] Implement agentic loop with tool execution
+- [x] Add `/api/agent/chat` endpoint to backend
+- [x] Create chat UI component in frontend
+- [x] Test end-to-end with real cluster data
 
 ## Key Design Decision: Run NVIDIA's Model Locally
 
@@ -184,12 +184,47 @@ BACKEND_BASE_URL=http://localhost:8080
 
 ## Success Criteria
 
-- [ ] vLLM runs Nemotron-3 on head pod without OOM
-- [ ] Agent responds to natural language queries
-- [ ] Tool calls execute successfully against backend
-- [ ] Responses include specific metrics from tools
-- [ ] Chat UI is functional in dashboard
-- [ ] Latency is acceptable (< 30s for complex queries)
+- [x] vLLM runs Nemotron-3 on head pod without OOM
+- [x] Agent responds to natural language queries
+- [x] Tool calls execute successfully against backend
+- [x] Responses include specific metrics from tools
+- [x] Chat UI is functional in dashboard
+- [x] Latency is acceptable (< 30s for complex queries)
+
+## Implementation Notes (2025-12-17)
+
+### Deployment Challenges Resolved
+
+1. **RunPod Image Caching**: RunPod cached old Docker images even with `:latest` tag. Solution: Use explicit version tags (`v4.2.0`)
+
+2. **Disk Space for Model**: Model download failed with 20GB container disk. Solution: Increased `volume_gb` to 100GB and set `HF_HOME=/workspace/.cache/huggingface` to use persistent volume
+
+3. **Port Conflict**: Log server on port 8001 conflicted with RunPod's nginx proxy. Solution: Changed to port 8002
+
+4. **Backend Connectivity**: Backend couldn't reach vLLM on pod. Solution: Added `LLM_BASE_URL` env var in docker-compose.yml pointing to RunPod proxy URL
+
+### Key Configuration
+
+```bash
+# terraform/variables.tf
+volume_gb = 100  # For ~60GB model + cache
+container_image = "mateodelnorte/gpu-watchdog-pod:v4.2.0"
+
+# terraform/main.tf (head node env)
+ENABLE_VLLM = "true"
+HF_TOKEN = var.hf_token
+HF_HOME = "/workspace/.cache/huggingface"
+
+# docker/docker-compose.yml (backend env)
+LLM_BASE_URL = "https://${HEAD_POD_ID}-8000.proxy.runpod.net/v1"
+```
+
+### Verified Working
+
+- Model loads in ~5 minutes (60GB GPU memory used)
+- Agent responds to cluster queries with real metrics
+- Markdown tables render correctly in chat UI
+- Tool calls visible in collapsible panel
 
 ## Interview Talking Points
 
