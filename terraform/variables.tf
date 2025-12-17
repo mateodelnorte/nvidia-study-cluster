@@ -64,7 +64,7 @@ variable "data_center_ids" {
 variable "volume_gb" {
   description = "Persistent volume size in GB (survives pod restarts)"
   type        = number
-  default     = 50
+  default     = 100  # 100GB to accommodate Nemotron-3 model (~60GB)
 }
 
 variable "container_disk_gb" {
@@ -79,7 +79,7 @@ variable "container_disk_gb" {
 variable "container_image" {
   description = "Docker image for pods (must have CUDA support)"
   type        = string
-  default     = "mateodelnorte/gpu-watchdog-pod:latest"
+  default     = "mateodelnorte/gpu-watchdog-pod:v4.2.0"
 }
 
 variable "exposed_ports" {
@@ -93,6 +93,8 @@ variable "exposed_ports" {
     "3001/http", # Grafana
     "9400/http", # GPU Metrics Exporter
     "9341/http", # Slurm Exporter (head node only)
+    "8000/http", # vLLM API (head node only)
+    "8002/http", # vLLM logs server (head node only)
   ]
 }
 
@@ -101,6 +103,16 @@ variable "exposed_ports" {
 # -----------------------------------------------------------------------------
 variable "ssh_public_key" {
   description = "SSH public key for node access (optional)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# -----------------------------------------------------------------------------
+# vLLM / AI Agent Configuration
+# -----------------------------------------------------------------------------
+variable "hf_token" {
+  description = "HuggingFace token for downloading Nemotron-3 model"
   type        = string
   default     = ""
   sensitive   = true

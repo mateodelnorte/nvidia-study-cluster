@@ -34,6 +34,9 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
     export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
 fi
 
+# Export Terraform variables from .env
+export TF_VAR_hf_token="${HF_TOKEN:-}"
+
 log() { echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $*"; }
 success() { echo -e "${GREEN}[$(date '+%H:%M:%S')] ✓${NC} $*"; }
 warn() { echo -e "${YELLOW}[$(date '+%H:%M:%S')] ⚠${NC} $*"; }

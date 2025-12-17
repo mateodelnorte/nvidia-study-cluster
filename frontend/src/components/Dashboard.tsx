@@ -7,6 +7,7 @@ import { MetricsSummary } from "./dashboard/MetricsSummary";
 import { GpuCard } from "./GpuCard";
 import { SlurmStatus } from "./SlurmStatus";
 import { AlertsPanel } from "./alerts/AlertsPanel";
+import { ChatPanel } from "./agent/ChatPanel";
 
 export function Dashboard() {
 	const {
@@ -93,6 +94,9 @@ export function Dashboard() {
 
 								{/* Alerts section */}
 								<AlertsPanel />
+
+								{/* AI Assistant */}
+								<ChatPanel />
 
 								{/* GPU cards grid */}
 								<Box>

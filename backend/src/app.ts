@@ -2,6 +2,7 @@ import cors from "cors";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import pinoHttp from "pino-http";
 import { logger } from "./lib/logger.js";
+import agentRouter from "./routes/agent.js";
 import alertsRouter from "./routes/alerts.js";
 import clusterRouter from "./routes/cluster.js";
 import metricsRouter from "./routes/metrics.js";
@@ -30,6 +31,7 @@ export function createApp(): Express {
 	app.use("/api/metrics", metricsRouter);
 	app.use("/api/alerts", alertsRouter);
 	app.use("/api/cluster", clusterRouter);
+	app.use("/api/agent", agentRouter);
 
 	// Error handler
 	app.use(

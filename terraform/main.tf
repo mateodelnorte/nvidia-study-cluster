@@ -38,6 +38,10 @@ resource "runpod_pod" "head_node" {
     NODE_ROLE    = "head"
     CLUSTER_NAME = var.cluster_name
     PUBLIC_KEY   = var.ssh_public_key
+    # vLLM for AI diagnostic agent
+    ENABLE_VLLM  = "true"
+    HF_TOKEN     = var.hf_token
+    HF_HOME      = "/workspace/.cache/huggingface"  # Use persistent volume for model cache
   }
 }
 

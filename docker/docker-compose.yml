@@ -56,6 +56,8 @@ services:
       - GPU_ENDPOINTS=https://${HEAD_POD_ID}-9400.proxy.runpod.net/metrics,https://${WORKER_POD_ID}-9400.proxy.runpod.net/metrics
       - SLURM_ENDPOINT=https://${HEAD_POD_ID}-9341.proxy.runpod.net/metrics
       - COLLECT_INTERVAL=10000
+      # vLLM API for AI diagnostic agent
+      - LLM_BASE_URL=https://${HEAD_POD_ID}-8000.proxy.runpod.net/v1
     volumes:
       - ../backend/src:/app/src:ro
       - ../backend/package.json:/app/package.json:ro

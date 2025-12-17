@@ -1,8 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# GPU Watchdog - Slurm Configless Mode Setup
+# GPU Watchdog - Slurm + vLLM Setup
 # =============================================================================
 # Uses Slurm's built-in configless mode (v20.11+) for automatic cluster config.
+# Optionally runs vLLM with NVIDIA Nemotron-3 for AI diagnostic agent.
 #
 # Environment variables (set via Terraform/deploy.sh):
 #   NODE_ROLE:    "head" or "worker" (required)
@@ -10,6 +11,12 @@
 #                 Use POD_ID.runpod.internal for cross-machine communication
 #   CLUSTER_NAME: Name of the cluster (default: gpu-watchdog)
 #   WORKER_NODES: Comma-separated "hostname:ip" pairs (optional, for head)
+#
+# vLLM environment variables (head node only):
+#   ENABLE_VLLM:  Set to "true" to start vLLM server
+#   HF_TOKEN:     HuggingFace token for downloading Nemotron-3
+#   VLLM_MODEL:   Model to serve (default: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
+#   VLLM_MAX_LEN: Max context length (default: 32768)
 #
 # How configless mode works:
 #   1. Head node runs slurmctld with --enable-configless
@@ -27,6 +34,11 @@ CLUSTER_NAME="${CLUSTER_NAME:-gpu-watchdog}"
 HEAD_NODE_IP="${HEAD_NODE_IP:-}"
 WORKER_NODES="${WORKER_NODES:-}"
 
+# vLLM settings
+ENABLE_VLLM="${ENABLE_VLLM:-false}"
+VLLM_MODEL="${VLLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16}"
+VLLM_MAX_LEN="${VLLM_MAX_LEN:-32768}"
+
 MY_HOSTNAME=$(hostname)
 MY_IP=$(hostname -I | awk '{print $1}')
 CPUS=$(nproc)
@@ -35,7 +47,7 @@ MEMORY=$(free -m | awk '/Mem:/ {print int($2 * 0.95)}')
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 log "=========================================="
-log "GPU Watchdog - Slurm Configless Setup"
+log "GPU Watchdog - Slurm + vLLM Setup"
 log "=========================================="
 log "  Role:     $NODE_ROLE"
 log "  Cluster:  $CLUSTER_NAME"
@@ -44,6 +56,7 @@ log "  IP:       $MY_IP"
 log "  CPUs:     $CPUS"
 log "  Memory:   ${MEMORY}MB"
 [ -n "$WORKER_NODES" ] && log "  Workers:  $WORKER_NODES"
+[ "$ENABLE_VLLM" = "true" ] && log "  vLLM:     $VLLM_MODEL"
 log ""
 
 # =============================================================================
@@ -201,6 +214,104 @@ else
 fi
 
 # =============================================================================
+# 4. vLLM Server (optional, head node only)
+# =============================================================================
+if [ "$NODE_ROLE" = "head" ] && [ "$ENABLE_VLLM" = "true" ]; then
+    log ""
+    log "[4/4] Starting vLLM server..."
+
+    if [ -z "$HF_TOKEN" ]; then
+        log "      WARN: HF_TOKEN not set - model download may fail if gated"
+    else
+        export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
+        log "      HF_TOKEN configured"
+    fi
+
+    log "      Model: $VLLM_MODEL"
+    log "      Max context: $VLLM_MAX_LEN tokens"
+    log "      Starting server on port 8000..."
+
+    # Start vLLM in background with tool calling support
+    cd /workspace/vllm
+    nohup python -m vllm.entrypoints.openai.api_server \
+        --model "$VLLM_MODEL" \
+        --max-num-seqs 4 \
+        --tensor-parallel-size 1 \
+        --max-model-len "$VLLM_MAX_LEN" \
+        --port 8000 \
+        --host 0.0.0.0 \
+        --trust-remote-code \
+        --enable-auto-tool-choice \
+        --tool-call-parser qwen3_coder \
+        --reasoning-parser-plugin nano_v3_reasoning_parser.py \
+        --reasoning-parser nano_v3 \
+        > "$LOG_DIR/vllm.log" 2>&1 &
+
+    # Start log server for monitoring vLLM startup (port 8002)
+    # Note: Port 8001 is used by RunPod's nginx proxy
+    log "      Starting log server on port 8002..."
+    cat > /tmp/log-server.py << 'LOGSERVER'
+import http.server
+import json
+import subprocess
+import os
+
+LOG_FILE = "/workspace/logs/vllm.log"
+
+class LogHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # Suppress request logging
+
+    def do_GET(self):
+        if self.path.startswith("/logs"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            lines = 100
+            if "?" in self.path:
+                try:
+                    lines = int(self.path.split("lines=")[1].split("&")[0])
+                except:
+                    pass
+
+            logs = ""
+            loading = True
+            if os.path.exists(LOG_FILE):
+                result = subprocess.run(["tail", "-n", str(lines), LOG_FILE], capture_output=True, text=True)
+                logs = result.stdout
+                # Check if model is loaded
+                loading = "Uvicorn running" not in logs and "Application startup complete" not in logs
+
+            self.wfile.write(json.dumps({"logs": logs, "loading": loading}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+http.server.HTTPServer(("0.0.0.0", 8002), LogHandler).serve_forever()
+LOGSERVER
+    nohup python /tmp/log-server.py > "$LOG_DIR/log-server.log" 2>&1 &
+
+    # Wait a bit and check if server started
+    sleep 10
+    if curl -s --connect-timeout 5 http://localhost:8000/health 2>/dev/null | grep -q -i "ok\|healthy"; then
+        log "      OK - http://localhost:8000/v1"
+    else
+        log "      Server starting (may take a few minutes to load model)"
+        log "      Check: tail -f $LOG_DIR/vllm.log"
+        log "      Or view logs: http://localhost:8001/logs"
+    fi
+fi
+
+# =============================================================================
 # Summary
 # =============================================================================
 log ""
@@ -218,6 +329,9 @@ if [ "$NODE_ROLE" = "head" ]; then
     log "Endpoints:"
     log "  GPU Metrics:   http://${MY_IP}:9400/metrics"
     log "  Slurm Metrics: http://${MY_IP}:9341/metrics"
+    if [ "$ENABLE_VLLM" = "true" ]; then
+        log "  vLLM API:      http://${MY_IP}:8000/v1"
+    fi
     log ""
     log "For workers, set: HEAD_NODE_IP=${MY_IP}"
 else
