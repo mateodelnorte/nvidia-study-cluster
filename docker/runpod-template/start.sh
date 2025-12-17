@@ -4,9 +4,10 @@
 # =============================================================================
 # Uses Slurm's built-in configless mode (v20.11+) for automatic cluster config.
 #
-# Environment variables (set via Terraform):
+# Environment variables (set via Terraform/deploy.sh):
 #   NODE_ROLE:    "head" or "worker" (required)
-#   HEAD_NODE_IP: Internal IP of head node (required for workers)
+#   HEAD_NODE_IP: Address of head node (required for workers)
+#                 Use POD_ID.runpod.internal for cross-machine communication
 #   CLUSTER_NAME: Name of the cluster (default: gpu-watchdog)
 #   WORKER_NODES: Comma-separated "hostname:ip" pairs (optional, for head)
 #
@@ -170,46 +171,33 @@ else
     # =========================================================================
     log "      Mode: Worker"
 
-    # Discover head if not provided
     if [ -z "$HEAD_NODE_IP" ]; then
-        log "      Discovering head node..."
-        for ip in 172.21.0.3 172.21.0.2 172.20.0.3 172.20.0.2 172.19.0.3; do
-            [ "$ip" = "$MY_IP" ] && continue
-            if curl -s --connect-timeout 2 "http://${ip}:9400/health" | grep -q "OK"; then
-                HEAD_NODE_IP="$ip"
-                log "      Found head at: $HEAD_NODE_IP"
+        log "      WARN: HEAD_NODE_IP not set"
+        log "      Slurm worker will not start. GPU metrics still available."
+        log "      To enable Slurm, set HEAD_NODE_IP env var and run: bash /pre_start.sh"
+    else
+        # Wait for head to be ready
+        log "      Waiting for head node ($HEAD_NODE_IP)..."
+        for i in {1..30}; do
+            if curl -s --connect-timeout 2 "http://${HEAD_NODE_IP}:9400/health" | grep -q "OK"; then
+                log "      Head is ready"
                 break
             fi
+            sleep 5
         done
-    fi
 
-    if [ -z "$HEAD_NODE_IP" ]; then
-        log "      ERROR: HEAD_NODE_IP not set and auto-discovery failed"
-        log "      Set HEAD_NODE_IP environment variable"
-        exit 1
-    fi
-
-    # Wait for head to be ready
-    log "      Waiting for head node ($HEAD_NODE_IP)..."
-    for i in {1..30}; do
-        if curl -s --connect-timeout 2 "http://${HEAD_NODE_IP}:9400/health" | grep -q "OK"; then
-            log "      Head is ready"
-            break
-        fi
+        # Start slurmd with -Z for dynamic self-registration (Slurm 22.05+)
+        # The worker will automatically register itself with the controller
+        # NodeName is automatically derived from hostname
+        log "      Starting slurmd with dynamic registration (-Z)..."
+        slurmd -Z --conf-server="${HEAD_NODE_IP}:6817" \
+            --conf "CPUs=${CPUS} RealMemory=${MEMORY}" \
+            > "$LOG_DIR/slurmd.log" 2>&1 &
         sleep 5
-    done
 
-    # Start slurmd with -Z for dynamic self-registration (Slurm 22.05+)
-    # The worker will automatically register itself with the controller
-    # NodeName is automatically derived from hostname
-    log "      Starting slurmd with dynamic registration (-Z)..."
-    slurmd -Z --conf-server="${HEAD_NODE_IP}:6817" \
-        --conf "CPUs=${CPUS} RealMemory=${MEMORY}" \
-        > "$LOG_DIR/slurmd.log" 2>&1 &
-    sleep 5
-
-    # Verify registration
-    log "      Verifying registration..."
+        # Verify registration
+        log "      Verifying registration..."
+    fi
 fi
 
 # =============================================================================

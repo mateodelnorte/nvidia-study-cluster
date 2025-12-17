@@ -26,6 +26,7 @@ resource "runpod_pod" "head_node" {
   cloud_type        = var.cloud_type
   data_center_ids   = var.data_center_ids
   support_public_ip = true
+  global_networking = true  # Enable cross-machine pod communication
 
   volume_in_gb         = var.volume_gb
   container_disk_in_gb = var.container_disk_gb
@@ -55,6 +56,7 @@ resource "runpod_pod" "worker_node" {
   cloud_type        = var.cloud_type
   data_center_ids   = var.data_center_ids
   support_public_ip = true
+  global_networking = true  # Enable cross-machine pod communication
 
   volume_in_gb         = var.volume_gb
   container_disk_in_gb = var.container_disk_gb

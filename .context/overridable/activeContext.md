@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-**Task 03 & 05 IN PROGRESS** - Frontend dashboard working, Slurm metrics flowing
+**Multi-Node Slurm Working** - Global networking enabled for reliable cross-machine pod communication. Full stack operational.
 
 ## Architecture
 
@@ -14,30 +14,36 @@
 │                                                                  │
 │  ┌──────────────┐    ┌─────────────────────────────────────┐   │
 │  │   Browser    │───▶│  Nginx Gateway (:3000)              │   │
-│  └──────────────┘    │  ├── /metrics/* → RunPod proxies    │   │
-│                      │  └── /* → Vite dev server           │   │
+│  └──────────────┘    │  ├── /api/* → Backend API           │   │
+│                      │  └── /* → Frontend (Vite)           │   │
 │                      └─────────────────────────────────────┘   │
 │                                      │                          │
 │  ┌─────────────┐  ┌─────────────┐   │   ┌─────────────┐        │
-│  │ Prometheus  │  │  Grafana    │   │   │  Frontend   │        │
-│  │   :9090     │  │   :3001     │   └──▶│  (React)    │        │
-│  └─────────────┘  └─────────────┘       └─────────────┘        │
+│  │ Prometheus  │  │  Grafana    │   │   │  Backend    │        │
+│  │   :9090     │  │   :3001     │   │   │  :8080      │        │
+│  └─────────────┘  └─────────────┘   │   └──────┬──────┘        │
+│                                      │          │ polls         │
+│                                      │          ▼               │
+│                                      │   ┌─────────────┐        │
+│                                      └──▶│  Frontend   │        │
+│                                          │  (React)    │        │
+│                                          └─────────────┘        │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                    HTTPS proxy to RunPod
+              Backend polls RunPod via HTTPS proxy
                               │
 ┌─────────────────────────────┼───────────────────────────────────┐
-│  RUNPOD PODS                │                                    │
+│  RUNPOD PODS (provisioned via Terraform)                         │
 │                             ▼                                    │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  HEAD NODE (vhn3um4zikj26g)                              │   │
+│  │  HEAD NODE                                               │   │
 │  │  ├── GPU Metrics Server (:9400)                          │   │
-│  │  ├── Slurm Exporter (:9341)                              │   │
+│  │  ├── Slurm Controller + Exporter (:9341)                 │   │
 │  │  └── A100-SXM4-80GB GPU                                  │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  WORKER NODE (k004g856rwxokd)                            │   │
+│  │  WORKER NODE                                             │   │
 │  │  ├── GPU Metrics Server (:9400)                          │   │
 │  │  └── A100-SXM4-80GB GPU                                  │   │
 │  └─────────────────────────────────────────────────────────┘   │
@@ -46,82 +52,89 @@
 
 ## Recent Changes (2025-12-16)
 
-### Frontend Implementation
-- Created complete React + Vite + TypeScript dashboard
-- Radix UI components with Tailwind CSS styling
-- Real-time GPU metrics from both pods
-- Slurm cluster status with job queue stats
-- Nginx reverse proxy to solve CORS issues
+### Global Networking for Cross-Machine Pods
+- Enabled `global_networking = true` in Terraform for both head and worker
+- Worker connects via `POD_ID.runpod.internal` DNS name (works across machines)
+- Pods get 10.x.x.x IPs on RunPod's internal network (100 Mbps between pods)
+- No longer relies on pods landing on same physical machine
 
-### Key Technical Decisions
-1. **Nginx over Vite proxy** - Cleaner separation, production-realistic
-2. **Relative URL paths** - Frontend uses `/metrics/gpu/head/metrics` not full URLs
-3. **Docker multi-stage** - Same Dockerfile for dev (hot reload) and prod
+### Deployment Orchestration
+- Created `scripts/deploy.sh` for zero-to-one deployment
+- `make deploy` provisions pods, sets up Slurm, starts services
+- `make teardown` destroys everything cleanly
+- deploy.sh now passes head pod ID (not internal IP) to workers
+
+### TanStack Query Migration
+- Frontend uses `@tanstack/react-query` for data fetching
+- Exponential backoff on errors (1s → 2s → 4s, max 30s)
+- Stale-while-revalidate caching
+- No more infinite retry loops when backend is down
+
+### Docker Compose Improvements
+- Anonymous volume for node_modules (`- /app/node_modules`)
+- CHOKIDAR_USEPOLLING for reliable HMR in Docker
+- Cleaner separation of host source and container deps
 
 ## Working Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| GPU metrics (head) | ✅ | Utilization, memory, temp, power, clocks |
-| GPU metrics (worker) | ✅ | Same metrics as head |
-| Slurm CPU stats | ✅ | Total, allocated, idle |
-| Slurm node status | ✅ | Node table with status badges |
-| Job queue stats | ✅ | Running, pending, completed, failed |
-| Auto-refresh | ✅ | 5-second polling interval |
-| Hot reload | ✅ | Vite dev server in Docker |
+| Zero-to-one deploy | ✅ | `make deploy` handles everything |
+| Multi-node Slurm | ✅ | Global networking for cross-machine communication |
+| GPU metrics | ✅ | Both nodes, all metrics |
+| Slurm metrics | ✅ | 512 CPUs, 2 nodes, job queue |
+| Historical data | ✅ | Backend stores in SQLite |
+| Alert rules | ✅ | Create, edit, delete alerts |
+| Error handling | ✅ | TanStack Query with backoff |
+| Hot reload | ✅ | Vite in Docker with polling |
 
 ## Key Files
 
+### Deployment
+- [scripts/deploy.sh](../../scripts/deploy.sh) - Full orchestration script
+- [scripts/setup-slurm.sh](../../scripts/setup-slurm.sh) - Slurm configless setup
+- [Makefile](../../Makefile) - deploy, deploy-skip-infra, teardown targets
+
+### Backend
+- [backend/src/index.ts](../../backend/src/index.ts) - Express server
+- [backend/src/services/metrics-collector.ts](../../backend/src/services/metrics-collector.ts) - RunPod polling
+- [backend/src/services/alert-evaluator.ts](../../backend/src/services/alert-evaluator.ts) - Alert engine
+
 ### Frontend
-- [frontend/src/App.tsx](../../frontend/src/App.tsx) - App entry point
+- [frontend/src/hooks/use-metrics.ts](../../frontend/src/hooks/use-metrics.ts) - TanStack Query hook
 - [frontend/src/components/Dashboard.tsx](../../frontend/src/components/Dashboard.tsx) - Main layout
-- [frontend/src/hooks/use-metrics.ts](../../frontend/src/hooks/use-metrics.ts) - Data fetching
-- [frontend/src/lib/parse-metrics.ts](../../frontend/src/lib/parse-metrics.ts) - Prometheus parser
+- [frontend/src/components/alerts/AlertsPanel.tsx](../../frontend/src/components/alerts/AlertsPanel.tsx) - Alert UI
 
 ### Infrastructure
-- [docker/docker-compose.yml](../../docker/docker-compose.yml) - All local services
-- [docker/nginx/metrics-proxy.conf](../../docker/nginx/metrics-proxy.conf) - Reverse proxy
-- [terraform/main.tf](../../terraform/main.tf) - RunPod pod provisioning
+- [docker/docker-compose.yml](../../docker/docker-compose.yml) - All services
+- [terraform/main.tf](../../terraform/main.tf) - RunPod provisioning
 
-## Environment Variables
-
-Frontend uses these (set in docker-compose.yml):
-```
-VITE_GPU_ENDPOINTS=/metrics/gpu/head/metrics,/metrics/gpu/worker/metrics
-VITE_SLURM_ENDPOINT=/metrics/slurm/metrics
-```
-
-Nginx proxies these paths to RunPod:
-- `/metrics/gpu/head/metrics` → `https://vhn3um4zikj26g-9400.proxy.runpod.net/metrics`
-- `/metrics/gpu/worker/metrics` → `https://k004g856rwxokd-9400.proxy.runpod.net/metrics`
-- `/metrics/slurm/metrics` → `https://vhn3um4zikj26g-9341.proxy.runpod.net/metrics`
-
-## Quick Start (Current Session)
+## Quick Start
 
 ```bash
-# Services already running - access at:
+# Full deployment (provisions pods, sets up everything)
+make deploy
+
+# Services only (pods already exist)
+make deploy-skip-infra
+
+# Tear down everything
+make teardown
+
+# Access points:
 # - Dashboard: http://localhost:3000
 # - Grafana: http://localhost:3001 (admin/gpuwatchdog)
 # - Prometheus: http://localhost:9090
-
-# Check status
-cd docker && docker compose ps
-
-# View logs
-cd docker && docker compose logs -f frontend
-
-# Restart after code changes (usually auto-reloads)
-cd docker && docker compose restart frontend
+# - Backend API: http://localhost:8080
 ```
 
 ## Next Actions
 
-1. **Option A:** Complete Task 03 - Configure multi-node Slurm (worker → head)
-2. **Option B:** Start Task 04 - Backend API for historical data, alerts
-3. **Option C:** Polish Task 05 - Add more dashboard features
+1. **Task 06: AI Agent** - LangChain.js for diagnostic assistance
+2. **Polish for demo** - Job submission UI, notification channels
 
 ## Known Limitations
 
-1. **Slurm single-node only** - Each pod runs independent Slurm, not a cluster
-2. **No data persistence** - Metrics lost on refresh (need backend for history)
-3. **Hardcoded RunPod URLs** - nginx config has pod IDs baked in
+1. **Pod IDs change per deploy** - docker/.env auto-updated by deploy.sh
+2. **No notification channels** - Alerts fire but don't send emails/Slack yet
+3. **Global network bandwidth** - 100 Mbps between pods (sufficient for control plane, may limit data transfer)

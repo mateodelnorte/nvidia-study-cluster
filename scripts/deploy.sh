@@ -123,16 +123,17 @@ init_slurm_head() {
 init_slurm_worker() {
     log "Initializing Slurm on worker node..."
 
-    # Get head's internal IP
-    local head_internal_ip=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-        -p "$HEAD_SSH_PORT" "root@$POD_IP" \
-        "hostname -I | awk '{print \$1}'" 2>/dev/null)
+    # Get head pod ID from terraform
+    cd "$PROJECT_ROOT/terraform"
+    local head_pod_id=$(terraform output -raw head_node_id 2>/dev/null)
 
-    log "Head internal IP: $head_internal_ip"
+    # Use RunPod's global networking: POD_ID.runpod.internal
+    local head_addr="${head_pod_id}.runpod.internal"
+    log "Head node address: $head_addr (via global networking)"
 
     ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
         -p "$WORKER_SSH_PORT" "root@$POD_IP" \
-        "mkdir -p /etc/slurm && export NODE_ROLE=worker && export CLUSTER_NAME=gpu-watchdog && export HEAD_NODE_IP=$head_internal_ip && bash /pre_start.sh" 2>&1 | \
+        "mkdir -p /etc/slurm && export NODE_ROLE=worker && export CLUSTER_NAME=gpu-watchdog && export HEAD_NODE_IP=$head_addr && bash /pre_start.sh" 2>&1 | \
         while read line; do echo "  [worker] $line"; done
 
     success "Worker node initialized"

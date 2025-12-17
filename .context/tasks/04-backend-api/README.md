@@ -2,7 +2,7 @@
 title: "04: Backend API"
 created: 2025-12-16
 modified: 2025-12-16
-status: active
+status: done
 priority: high
 owner: mattwwalters
 assignee: claude-agent
@@ -229,12 +229,12 @@ export const config = {
 
 ## Success Criteria
 
-- [ ] Backend starts and serves `/health` endpoint
-- [ ] Metrics collected from RunPod every 10 seconds
-- [ ] Historical data queryable via API
-- [ ] Alerts can be created and trigger on thresholds
-- [ ] Frontend displays historical charts
-- [ ] Docker container works in compose stack
+- [x] Backend starts and serves `/health` endpoint
+- [x] Metrics collected from RunPod every 10 seconds
+- [x] Historical data queryable via API
+- [x] Alerts can be created and trigger on thresholds
+- [x] Frontend displays historical charts
+- [x] Docker container works in compose stack
 
 ## Interview Talking Points
 

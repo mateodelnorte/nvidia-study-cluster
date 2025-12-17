@@ -2,7 +2,7 @@
 title: "03: Slurm Cluster Setup"
 created: 2025-12-15
 modified: 2025-12-16
-status: active
+status: done
 priority: high
 owner: mattwwalters
 assignee: claude-agent
@@ -21,71 +21,54 @@ Configure Slurm workload manager on the RunPod GPU cluster to enable job schedul
 - [x] Add prometheus-slurm-exporter for metrics
 - [x] Expose Slurm metrics on port 9341
 - [x] Display Slurm metrics in frontend dashboard
-- [ ] Configure multi-node Slurm (worker connects to head)
-- [ ] Test job submission across nodes
-- [ ] Document Slurm commands for demo
+- [x] Configure multi-node Slurm (worker connects to head via global networking)
+- [x] Test job submission across nodes
+- [x] Document Slurm commands for demo
 
 ## Current Status
 
 ### Completed (2025-12-16)
 
-**Single-Node Slurm Working:**
-- Slurm installed in `mateodelnorte/gpu-watchdog-pod:latest` Docker image
-- `slurmctld` and `slurmd` running on head node
+**Multi-Node Slurm Cluster Working:**
+- 2-node Slurm cluster with 512 total CPUs (256 per node)
+- Head runs `slurmctld` (controller) + `slurmd`
+- Worker runs `slurmd` with configless mode (`-Z --conf-server`)
+- Worker connects to head via `POD_ID.runpod.internal` (global networking)
 - `prometheus-slurm-exporter` exposing metrics at `:9341`
-- Frontend displays:
-  - Total/Allocated/Idle CPUs (256 vCPUs)
-  - Node status table
-  - Job queue stats (pending, running, completed, failed)
+- Frontend displays all cluster metrics
 
 **Metrics Available:**
 ```
-slurm_cpus_total 256
-slurm_cpus_idle 256
-slurm_cpus_alloc 0
-slurm_nodes_idle 1
+slurm_cpus_total 512
+slurm_cpus_idle 512
+slurm_nodes_total 2
+slurm_nodes_idle 2
 slurm_queue_pending 0
 slurm_queue_running 0
 ```
 
-### Remaining Work
-
-**Multi-Node Configuration:**
-Currently each pod runs its own independent Slurm. To have a true cluster:
-
-1. Head node runs `slurmctld` (controller)
-2. Worker nodes run `slurmd` (compute daemon) pointing to head
-3. Shared configuration via `slurm.conf`
-4. Network connectivity between pods (RunPod internal network or public IPs)
+**Key Implementation Details:**
+- Terraform enables `global_networking = true` for both pods
+- deploy.sh passes head's pod ID to worker as `HEAD_NODE_IP`
+- start.sh uses `slurmd -Z --conf-server=POD_ID.runpod.internal:6817`
+- Munge key is pre-baked in Docker image (same for all pods)
 
 ## Architecture
 
-### Current (Single-Node)
+### Current (Multi-Node with Global Networking)
 
 ```
-HEAD POD                          WORKER POD
-┌─────────────────────┐          ┌─────────────────────┐
-│ slurmctld          │          │ slurmctld          │
-│ slurmd             │          │ slurmd             │
-│ slurm-exporter:9341│          │ (no exporter)      │
-│                    │          │                    │
-│ [1 node cluster]   │          │ [1 node cluster]   │
-└─────────────────────┘          └─────────────────────┘
-      Independent                      Independent
-```
-
-### Target (Multi-Node)
-
-```
-HEAD POD                          WORKER POD
-┌─────────────────────┐          ┌─────────────────────┐
-│ slurmctld ◄────────────────────┤ slurmd             │
-│ slurmd             │          │                    │
-│ slurm-exporter:9341│          │                    │
-│                    │          │                    │
-│ [controller]       │ network  │ [compute node]     │
-└─────────────────────┘          └─────────────────────┘
-              └──── 2-node cluster ────┘
+HEAD POD                                    WORKER POD
+┌─────────────────────────────────┐       ┌─────────────────────────────────┐
+│ slurmctld (controller)          │◀──────│ slurmd (compute daemon)         │
+│ slurmd (compute daemon)         │       │ GPU metrics server :9400        │
+│ prometheus-slurm-exporter :9341 │       │                                 │
+│ GPU metrics server :9400        │       │ Connects via:                   │
+│                                 │       │ POD_ID.runpod.internal:6817     │
+│ IP: 10.x.x.x (global network)   │       │ IP: 10.x.x.x (global network)   │
+└─────────────────────────────────┘       └─────────────────────────────────┘
+                    └────────────── 2-node cluster ──────────────┘
+                          RunPod Global Networking (100 Mbps)
 ```
 
 ## Implementation Details
@@ -195,9 +178,9 @@ squeue
 - [x] Slurm metrics visible in frontend
 - [x] Node status displayed
 - [x] Job queue stats shown
-- [ ] Multi-node cluster functional
-- [ ] Jobs can be submitted and scheduled
-- [ ] Worker node appears in sinfo
+- [x] Multi-node cluster functional (2 nodes, 512 CPUs)
+- [x] Jobs can be submitted and scheduled
+- [x] Worker node appears in sinfo
 
 ## Interview Talking Points
 
